@@ -1,0 +1,107 @@
+*========DHT presence use-cases==============
+
+Working name for the protocol/functionality: dchat
+**Note:** Might be a good idea to look for a name which can be readily (ab)used as a verb.
+
+*Basic requirements
+  * Not dependent on any single server being continuously alive
+  * Cryptographically-secure: the owner of the ID must be able to assert their ownership and identity in a provable fashion
+  * Cryptographically-secure: the recipients / contacts must be able to verify the authenticity of the ID they wish to reach, and the authorship of any communication
+  * Must have a human-readable, concise syntax for the IDs which users can remember and exchange
+    * The human-readable strings should use a familiar notation, preferably nick@server.tld which is already used in email and XMPP
+  * The full cryptographic ID must be recoverable using //only //the human-readable ID string
+  * Must be at least as "idiot proof" as Skype or it will end up sharing the obscurity of SIP+RTP VoIP.
+    * There should be very little "hey look, we are a swarm of interoperating servers" visible to the end user, unlike in XMPP. Nobody chooses a Skype server, and it's a Good Thing™
+      * That partially connects to the requirement of surviving any and all server going down, which is #1 issue in XMPP. I can be free and libre as much as I want, but if my server goes down a year from now, I need to rebuild my roster. Gets old after the third time.
+      * How do we structure it so that there's the ability to choose, but without exposing Jabber's eternal problem of "there are a million choices, how do I start?"
+
+*Undecided
+  * Should the ID creation be tied to DNS records? There are arguments both for and against
+    * For
+      * Allows somewhat better abuse prevention and discovery if somebody has to own the part of the namespace abusive IDs are coming from
+      * It makes it easy to ensure globally-unique IDs, and obvious how to deal with namespacing and what @server.tld to choose
+    * Against
+      * Would prevent people from claiming their existing email address, unless the owner of the email provided dchat service. GMail does provide GTalk, but they have no incentive to adopt dchat, and there are still more providers in the world than just GMail
+    * Overall I'm leaning somewhat towards saying "yes", because it's more manageable than otherwise. And it still allows you to create your own cohesive identity at mydomain.tld if you want to, just like you have to do today if you want email@mydomain.tld and jabber@mydomain.tld. Ultimately you have to invest some time and care if you want to have a central ID, and most people don't care.
+
+*Use cases
+
+*Choosing a server
+Some kind of system to allow the discovery and choice of servers to happen semi-automatically is needed. We need to design such a thing
+  * For registration, some choice has to happen. Perhaps a list of "these domains are willing to register new IDs"
+  * For simple connection, the server should be just chosen based on which ones are nearby and responsive. No UI whatsoever should be involved unless a catastrophic network failure occurs.
+
+*Creating a new ID
+  * Alice wants to register a new account
+    * She chooses an account name, and registers alice@server
+    * When the registration is complete, she should be able to give alice@server to anyone who wants to add her to their contacts list, and she should also be able to start adding people
+    * alice@server is all Alice should ever know in order to be able to use her account. She doesn't now or care about any files on her computer, and should not be required to copy them to prevent losing the access to her account
+
+*Distributing an ID for other people to use
+  * Alice wants to put alice@server on her blog, so that people can add their to their dchat contacts
+
+*Adding contacts
+  * Bob has received alices account ID. He wants to add her to his contact
+    * he types in alice@server into the "Add contact" dialogue
+    * After a short time, he gets a confirmation with Alice's profile displayed
+    * He clicks OK, and her contact is now in his roster. From now on, he can talk with Alice
+  * Bob doesn't know Alice's address, but he knows her name / city / age etc.
+    * He clicks [Search] in the "Add contact" dialogue, and enters what he knows
+    * After a short time, he gets a list or results
+    * If he thinks he found the right Alice, he can click on the result, see the profile, and add it
+
+*Logging on
+  * Alice logs on
+    * Her status is set to Available, so she becomes visible to all her contacts
+    * Similarly, she can see the status of her contacts
+
+*Initiating a chat
+  * Bob wants to chat with Alice
+    * He clicks on his contact list, and the chat window pops up
+    * He types in a message, clicks [Send], and the message is delivered. If the process takes longer, a possible "Not delivered yet" notification might be displayed next to pending messages
+
+
+
+*Proposed Implementations
+
+*Choosing a server
+Some kind of system to allow the discovery and choice of servers to happen semi-automatically is needed. We need to design such a thing
+  * For registration, perhaps a list of "these domains are willing to register new IDs", populated in the DHT, together with ratings and comments from users, similar to the torrent ratings clients like µTorrent support. Then the user could browse for something that looks good for them (and would serve as their default server), based on what they fancy. Comments/ratings would allow very bad and unstable nodes to be pushed down the list.
+    * If a new domain and server is added to the network, and willing to take on new IDs, it would publish itself in the DHT
+    * If other servers vouch for the newcomer, and it's deemed trustworthy (see below on adding new nodes to the network), the cached list would be updated with the new entry
+    * Conversely, when a server no longer wants to accept new registrations, it posts a removal request, and caches are updated to reflect that
+    * When a client presents the server choice UI to the user, it first grabs a copy of the list, then pings all the servers in order of priority to ask if the offer is valid, and filters out the ones that respond negatively
+    * When a server in the list is down or doesn't respond for other reason, the checkup process is initiated
+      * The client posts a message about it and propagates it to its DHT neighbours.
+      * These neighbours pick a small number (2-3) of nodes to repeat the query after a small delay, between 10s and 2m
+      * If the server is up and responds, nothing is done, the original client is notified, and checkup is cancelled
+      * Otherwise, a random subset of nodes (preferably ones designed to be caches, ie. the ones that are guaranteed to stay online) is selected, and each chooses a delay to repeat the query over the period of, say, next 6h
+      * If after 6h no reply is received, the server is marked as "down", and first phase of removal is initiated
+      * Each of the nodes in the checkup set marks the server's entry as "currently down", and pushes the message to its DHT neighbours for propagation
+      * As the down flag is propagated, each node it's passing through has a small chance (say, 1%) of deciding to query the server itself at a random point within the next 24h. The small chance and a delay are there to prevent a ping storm bringing down a node that was temporarily disconnected when it comes back online
+      * If after 24h no requests are answered, the server is marked for invalid and scheduled for deletion
+      * If after 7 days the server is still not available, it's permanently deleted from the cached copy and deletion propagated through the DHT
+  * For simple connection, the server should be just chosen based on which ones are nearby and responsive, since the connection can happen from any place. A short-term cache (say, a week or so) should be maintained so that the previously chosen server can be reused, avoiding the overhead of full first-time setup (see below for details on connecting to a server)
+
+*Creating a new ID
+The following assumes creating //new// IDs @domain.tld is tied to the DNS ownership of domain.tld.
+   - User chooses a domain they want to have their new ID in, and an ID, for example alice@domain.tld
+   - The client contacts the server at domain.tld and requests the availability of alice@. At the same time,  a DHT lookup is performed for an existing alice@domain.tld
+    * "Checking if alice@domain.tld is available..." is printed, and the UI spins for a little while to allow the DHT query to be processed
+    * There should be a flag, "please answer immediately with what you know from your cache, but continue with a full lookup and return any differing results later". This way only the top-level, big caches need to be queried and the answer only takes a few seconds to arrive, but exhaustive search can be done. Once a definitive "not found" answer is obtained, it should also be returned back to the asker for confirmation.
+    * See #8 for details on conflict resolution
+   - If the server returns OK for alice@, and no DHT record is found, the registration proceeds. Otherwise goto 1.
+   - A new <pubkey, privkey> pair is generated by the client
+   - The pubkey is combined with the ID string, timestamp and signed by the server's private key. This record consititutes a full ID now and is submitted to the DHT.
+   - The keypair is passphrased with a password chosen by the user, via scrypt() ([[http://en.wikipedia.org/wiki/scrypt)\]]
+   - The passphrased keypair is also published to the DHT, so that it can be looked up by using just the ID string
+     - TODO: Originally this step was meant to be optional, but in practice it's needed to allow users to recover the ID using only the human-readable ID string, since nobody expects to have to copy around files when they wish to keep their ID when reformatting, changing machines, etc. There could be a power-user option to omit it for those who really want to and know what they're doing, but 99% should publish it. This however creates a problem, in that users choose crappy passwords, and anyone who guesses the crappy password can take over the ID permanently. Changing the password is not sufficient, since the attacker knows the keypair. Perhaps a mechanism to replace a previously existing ID with a new keypair (and the same ID string), if the request to do so is vetted by one of a few trusted authority servers? Need to avoid recreating the clusterfuck currently in browser certs tho.
+     - The UI should present a choice to upload the passphrased keypair for recoveryto one of several well-known keystore servers, which would make it possible to reset the password should the user forget it. The UI should make it clear that the ID would be uploaded to an external server, and that choosing to omit this step means it's permanently impossible to recover the ID in case the password is lost.
+     - TODO: we need to design a scheme to submit the verifying information that is sufficient to reset the password. It should probably use a browser to redirect to a webpage supplied by the keystore server to complete this step.
+   - At this point, the new ID is created, but it's not fully established yet. It needs to be propagated through the DHT, and delayed replies might arrive from the ID lookup with records of earlier existing records which were not found in the initial query
+     - The UI should present a screen saying something along the lines "Congratulations, your registration as alice@domain.tld is complete! Please note that it can take up to 24h before the account is fully activated. During that time, you might use your new account freely, but is still a small chance that an existing account for alice@domain.tld is found, conflicting with yours. In the unlikely case this happens, you will be prompted to choose a new account name."
+     - If a conflict is found, the conflicting account is checked both for its timestamp (earlier timestamp wins), and its presence. That is, the conflicting ID must have been created earlier, and signed by a currently trusted and active server, OR be present in a large subset of DHT nodes' cache, ie. a web of trust must be established. This is to prevent attacks by single / small number of nodes falsely claiming an ID.
+     - If the conflict is indeed valid, and the new ID loses, the user is prompted to choose a new name, going through the same check as with a fresh ID, but omitting the keypair generation. A new ID record is created using the same keypair, and submitted to the DHT. If any contacts have been added to the roster in the meantime, they remain valid, since the keypair remains the same. Additionally the keypair submitted to a keystore server (if the user chose to do so) needs to be updated to point to the new ID string.
+     - If any contacts add/are added by the new ID before it's at least 24h old, their UI should probably present a small icon with a tooltip explaining it's a fresh ID and might yet change. If that happens, the contacts should be notified that alice@domain.tld is now known as bigalice85@domain.tld, and that if they have written that ID down anywhere, they should change it.
+   - After 24h have passed with no reversal, the ID is considered established, and DHT nodes begin to commit it
+
